@@ -1,207 +1,136 @@
-# CMOS Inverter Characterisation — gpdk090
+# The Inverter That Argued Back — CMOS Characterisation in gpdk090
 
-**An engineering design notebook. Stage 1 of a 4-stage telescopic design project ending at a 6T SRAM cell with sense amplifier analysis.**
+**A single-circuit engineering notebook: the CMOS inverter, characterised from nothing to fully understood.**
 
 ![Tool](https://img.shields.io/badge/Tool-Cadence%20Virtuoso-red)
 ![Tech](https://img.shields.io/badge/Technology-gpdk090%2090nm-blue)
 ![Sim](https://img.shields.io/badge/Simulator-Spectre-green)
 ![VDD](https://img.shields.io/badge/VDD-1.8V-orange)
-![Stage](https://img.shields.io/badge/Stage-1%20of%204-lightgrey)
 
 > A circuit designer who cannot predict a simulation result before running it does not yet understand the circuit.
 
-This repository is not a collection of simulation screenshots. It is a chronological record of how my understanding of the CMOS inverter evolved — including the predictions that failed, the causal reasoning I had to correct, and the point at which the simulations stopped surprising me.
+This is not a folder of simulation screenshots. It is the record of an argument — between what I thought a CMOS inverter would do, and what it actually did — spread across seven chapters, until the two finally agreed for the right reasons.
 
 ---
 
-## Why This Project Exists
+## Prologue: Why an Inverter Deserves a Whole Story
 
-I wanted to reach a specific state before touching anything more complex than an inverter: the state where I could write down what a simulation would show *before* running it, and be right for the right reasons.
+An inverter is two transistors and a wire. It's usually the first thing anyone draws in a CMOS course, and the temptation is to treat it that way — sketch it, simulate it once, move on. I didn't, and the reason is simple: **"the simulation gave the right number" and "I understand the circuit" are not the same claim, and it's very easy to mistake one for the other.**
 
-The inverter is the smallest circuit where that discipline can be practised honestly. It contains the essential physics of everything that follows:
+The test I set for myself was this: could I write down what a simulation would show *before* running it, and be right for the right reasons — not just right? An inverter is small enough that this discipline can actually be checked. Two transistors, one output node, no place for a wrong assumption to hide behind extra complexity. If a prediction failed, there were only a few places the failure could have come from, which meant I could actually trace it back and fix the *reasoning*, not just the answer.
 
-```
-Inverter switching threshold (VM)
-        │  cross-couple two inverters
-        ▼
-Bistable latch — two stable states — a memory element
-        │  add access transistors
-        ▼
-6T SRAM cell — controllable read and write
-        │  add regenerative amplification
-        ▼
-Sense amplifier — rail-to-rail output from a mV differential
-```
+That's why this notebook exists as seven chapters instead of one plot. Each chapter is a question I asked about this one circuit, a prediction I committed to in writing before touching the simulator, and — more often than I expected — a contradiction between the two that forced me to fix something in how I was thinking, not just in a number.
 
-If I cannot explain why the inverter switches where it does, I cannot explain read disturb in SRAM or regeneration in a sense amplifier. So the inverter came first, and it was not allowed to be quick.
-
----
-
-## Project Objectives
-
-1. Establish a defensible baseline with no prior assumptions about the technology.
-2. Understand — causally, not just numerically — how each transistor's width moves the switching threshold VM.
-3. Find the exact sizing that centres VM at VDD/2, and extract the technology's real µn/µp from that sizing.
-4. Determine whether the sizing that balances VM also balances propagation delay, and understand why or why not.
+**Objectives set at the start**, which double as the table of contents for this argument:
+1. Start from a technology I know nothing about, with no borrowed assumptions.
+2. Understand — causally — how each transistor's width moves VM.
+3. Find the exact sizing that centres VM at VDD/2, and use it to extract the technology's real µn/µp.
+4. Find out whether that same sizing also balances propagation delay.
 5. Quantify noise immunity at the final sizing.
-6. Leave this stage only when every one of these behaviours is predictable before simulation.
+6. Don't call the circuit "understood" until every one of the above is predictable *before* the simulation runs.
 
----
-
-## Engineering Workflow
-
-Every experiment in this notebook follows the same loop:
-
-```
-Question
-   ↓
-Current mental model
-   ↓
-Prediction (written down before simulation)
-   ↓
-Intermediate verification (sanity checks, hand analysis)
-   ↓
-Simulation
-   ↓
-Contradiction, if any
-   ↓
-Missing physics identified
-   ↓
-Updated mental model
-   ↓
-Engineering insight
-   ↓
-Next question
-```
-
-The contradictions are kept in the record deliberately. They are where the learning happened.
-
----
-
-## Technology
+**The technology**, so the numbers below have a home:
 
 | Parameter | Value |
 |-----------|-------|
 | Process | gpdk090 (90 nm CMOS, generic PDK) |
-| Tool | Cadence Virtuoso |
-| Simulator | Spectre |
+| Tool / Simulator | Cadence Virtuoso / Spectre |
 | VDD | 1.8 V |
 | Minimum L | 100 nm |
 | Minimum W | 120 nm |
 | Devices | `nmos1v`, `pmos1v` |
-| Input stimulus | Pulse 0 → 1.8 V, tr = 1 ns (transient); DC sweep 0 → 1.8 V (VTC) |
+| Input stimulus | Pulse 0→1.8 V, tr = 1 ns (transient); DC sweep 0→1.8 V (VTC) |
 
-One number in this table is missing on purpose: µn/µp. Textbooks give values between 2 and 3. I did not want a textbook value — extracting the real ratio for this technology became one of the objectives, and it appears in Chapter 4.
+One number is deliberately absent from that table: µn/µp. Textbooks quote 2–3 and leave it there. I wanted the number this specific PDK actually uses, measured from its own switching behaviour, not copied from a book. That measurement becomes Chapter 4's real payoff.
+
+Every chapter below follows the same loop, because the loop *is* the discipline the project was built to practise:
+
+```
+Question → Mental model → Prediction (written down first) → Sanity check →
+Simulation → Contradiction (if any) → Missing physics → Updated model → Next question
+```
+
+The contradictions are kept in, on purpose. They're where the story actually happens — and, chapter to chapter, each contradiction is *why* the next question got asked. Nothing here moves forward just because it's "next on the list"; each new experiment exists because the previous one left something unexplained.
 
 ---
 
-## Design Evolution
+## Chapter 1 — The Baseline That Refused to Behave
 
-### Chapter 1 — Finding a Neutral Starting Point
-
-**Question.** If I know nothing about this technology's mobility ratio, what is the most defensible starting point?
-
-**Mental model at this stage.** The inverter is a resistive divider whose two "resistances" are set by transistor geometry. Since µn > µp in every CMOS process I had read about, equal geometry should mean unequal strength.
-
-**Prediction.** With Wn = Wp = 120n and L = 100n, kn > kp, the NMOS pull-down dominates, and VM lands *below* VDD/2 — somewhere left of 900 mV.
-
-The honest move was to impose no sizing assumption at all. Equal minimum geometry means every asymmetry that appears later is the technology speaking, not my prior.
-
-*Why this experiment?* To establish the reference against which every later deviation is measured.
+The story opens with a bias I didn't know I was carrying. Every CMOS process I'd read about has µn > µp — electrons simply move faster than holes. So before running anything, I made a prediction: with Wn = Wp = 120 nm and L = 100 nm (equal, minimum geometry, no sizing assumption), the stronger NMOS should win the tug-of-war, and VM should sit *below* VDD/2 — somewhere left of 900 mV.
 
 ![Inverter schematic — Wn = Wp = 120n, L = 100n](inverter_schematic.png)
 
-*Fig 1 — Schematic. PM0: pmos1v W=120n L=100n, NM0: nmos1v W=120n L=100n, VDD = 1.8 V.*
+*Fig 1 — the schematic — is the plainest picture in the whole notebook: PM0 and NM0, both 120n/100n, VDD tied to 1.8 V. Nothing clever. That was the point — equal minimum geometry means whatever asymmetry shows up later is the technology talking, not me.*
 
-Before trusting any VTC number I verified the setup dynamically: a transient run had to show clean rail-to-rail complementary switching, otherwise the DC sweep would be characterising a broken testbench.
+Before trusting a DC sweep, I ran a transient pulse to make sure the testbench itself wasn't lying to me — rail-to-rail, complementary switching, clean edges.
 
 ![Baseline VTC with marker at VM](vtc_symmetric.png)
 
-*Fig 2 — Transient (left): clean 0 ↔ 1.8 V switching. VTC (right): marker M1 reads 900.0 mV → 900.0 mV.*
+*Fig 2 — Transient (left): clean 0 ↔ 1.8 V switching, no half-measures. VTC (right): marker M1 reads 900.0 mV → 900.0 mV.* Only once the transient was clean did the VTC get to speak. And it said something I didn't expect:
 
-**Observation.** VM = 900 mV. Exactly VDD/2. My prediction was wrong.
+**VM = 900.0 mV. Exactly VDD/2.** My prediction was wrong.
 
-**Missing physics.** I had assumed the mobility difference would dominate at minimum dimensions. At 90 nm it does not act alone: short-channel effects and the PDK's threshold-voltage calibration partially compensate the mobility imbalance at minimum sizing. Equal minimum geometry in gpdk090 is accidentally symmetric.
+Here's where the story gets its first twist. I'd assumed mobility imbalance would dominate at minimum size. It doesn't, not alone — at 90 nm, short-channel effects and the PDK's own threshold-voltage calibration quietly compensate for the mobility gap right at minimum geometry. Equal minimum sizing in gpdk090 turns out to be *accidentally* symmetric. Not a law of physics — a coincidence of this particular node, at this particular size.
 
-**Updated mental model.** The mobility asymmetry is real but latent at minimum size. It should reappear once the widths move away from the minimum — which is exactly what the next two chapters test.
+That's an unsettling thing to learn on page one, because it means the asymmetry I expected is still out there, just hiding — I just haven't moved the sizing far enough from minimum to see it yet. **Why go to Chapter 2 next:** the only way to test "is the mobility gap hiding, or was I simply wrong about it existing" is to stop holding size fixed and deliberately unbalance one device at a time.
 
-#### Engineering Notebook — Chapter 1
-
-- **Question I can answer now:** what VM is at equal minimum sizing in gpdk090, and why the naive µn > µp argument fails there.
-- **Mistake I corrected:** assuming long-channel intuition transfers unmodified to a 90 nm PDK.
-- **Mental model I built:** VM as the equilibrium of a tug-of-war between pull-up and pull-down strength.
-- **General principle:** a wrong prediction with a clean testbench is data, not failure. Write the prediction down first or this data is lost.
-- **Connection forward:** this 900 mV baseline is the reference for every sweep that follows.
+*What Chapter 1 leaves behind: a 900 mV reference point that every later chapter measures itself against, and a working model — VM as the equilibrium point of a tug-of-war between pull-up and pull-down strength — that's about to be tested twice.*
 
 ---
 
-### Chapter 2 — Understanding Pull-Up Strength
+## Chapter 2 — Widening the PMOS, and Getting the Right Answer for the Wrong Reason
 
-**Question.** How sensitive is VM to PMOS width, and in which direction does it move?
+If VM is a tug-of-war, the obvious next experiment is to make one side stronger and watch which way the rope moves. I held Wn fixed at 120 nm and swept Wp from 120 nm to 500 nm across ten steps — one variable at a time, nothing else touched.
 
-**Mental model.** In the transition region both devices conduct; the output sits where their currents balance. In divider terms: Vout ≈ VDD · Ron,n / (Ron,p + Ron,n).
-
-**Prediction.** Widening the PMOS strengthens the pull-up, lifts Vout for every input, and drags the VTC crossing point — VM — to the *left*. (Left, not right: with a stronger pull-up, less input voltage is needed before the NMOS starts losing the fight at the crossing condition Vout = Vin.)
-
-*Why this experiment?* One variable at a time. Wn stays fixed at 120n; Wp sweeps 120n → 500n in 10 steps.
+**Prediction, from the divider intuition** Vout ≈ VDD·Ron,n/(Ron,p+Ron,n): a wider PMOS means a stronger pull-up, so Vout should lift at every input, and the crossing point — VM — should slide *left*.
 
 ![PMOS parametric sweep](pmos_sweep.png)
 
-*Fig 3 — VTC family for Wp = 120n → 500n, Wn fixed. The curves translate monotonically; the crossing with the Vin = Vout diagonal moves left.*
+*Fig 3 — VTC family for Wp = 120n → 500n, Wn fixed.* Exactly what the prediction called for: the whole VTC family shifts up and left as Wp grows, monotonically, and the crossing with the Vin = Vout diagonal walks steadily leftward with it.
 
-**Observation.** The VTC body shifts up and left, monotonically. VM decreases with Wp. The direction matched the prediction — but when I tried to articulate *why* to myself, the argument came out wrong.
+Direction: correct. But when I tried to say out loud *why*, the sentence that came out was "Ron of the PMOS decreases, so its current increases" — and that sentence has the causality backwards. The simulation can't catch that mistake, because the numbers agree with it either way. This was the first real contradiction of the project, and it wasn't in the plot — it was in my own explanation.
 
-**Contradiction — in the reasoning, not the plot.** My first verbal explanation was: "Ron of the PMOS decreases, therefore its current increases." The simulation could not falsify this, because the numbers come out the same. But the causality is inverted.
-
-**Missing physics — the causal order.**
+**The correct chain, width as the actual cause:**
 
 ```
 Wp↑  →  more parallel conduction channels
      →  kp↑              (intrinsic transconductance parameter)
      →  Id↑ at same VSG  (more current capability)
      →  Ron,p↓           ← CONSEQUENCE, not cause
-     →  Vout↑ for same Vin
+     →  Vout↑ for the same Vin
      →  VTC shifts up and left
      →  VM↓
 ```
 
-Width is the physical cause. Ron is only how we summarise the effect — like adding resistors in parallel: the total drops as a *consequence* of the added path, not the other way round. The distinction sounds pedantic until a sizing change behaves unusually and the inverted chain predicts the wrong direction.
+Width is upstream of everything. Ron is just the shorthand we use to summarise the effect afterward — the way adding a resistor in parallel drops total resistance *because* a path was added, not the other way round. It sounds like a technicality until a sizing change behaves unexpectedly and the backwards chain predicts the wrong direction with total confidence.
 
-**Observation on the spacing.** The VM shift per step shrinks as Wp grows. Not a plotting artifact — VM depends on √(kn/kp), so doubling Wp does not double the effect. Linear interpolation for sizing estimates is unreliable here. This mattered in Chapter 4.
+One more thing Fig 3 was quietly telling me: the VM shift per step *shrinks* as Wp grows. Not a rendering artifact — VM depends on √(kn/kp), a square root, so doubling Wp does not double the effect. That compression comes back with real consequences in Chapter 4.
 
-#### Engineering Notebook — Chapter 2
-
-- **Question I can answer now:** the direction, mechanism, and saturation behaviour of VM versus Wp.
-- **Mistake I corrected:** stating the causal chain backwards ("Ron↓ therefore Id↑").
-- **Mental model I built:** W → k → Id → Ron, strictly in that order.
-- **General principle:** a correct numerical answer can hide an inverted causal model. Simulation checks numbers, not reasoning.
-- **Connection forward:** if the pull-up sweep is understood, the pull-down sweep becomes a prediction test.
+*What Chapter 2 leaves behind: the rule W → k → Id → Ron, in that strict order, plus a warning that a correct number can be hiding an inverted model. The pull-up side of the tug-of-war is now understood. **Why go to Chapter 3 next:** a tug-of-war has two sides, and I'd only tested one — strengthening the PMOS says nothing about whether strengthening the NMOS behaves as a true mirror image or breaks the symmetry in some new way. That has to be checked, not assumed.*
 
 ---
 
-### Chapter 3 — Understanding Pull-Down Strength
+## Chapter 3 — Widening the NMOS, and Being Half Right in the Worst Way
 
-**Question.** Does widening the NMOS move VM the same way as widening the PMOS, or the opposite way?
-
-**Prediction — written before the run, kept verbatim.** My reasoning at the time: Wn↑ → Id↑, and since Vgs is fixed, Vds must increase, so Vout rises and the curve shifts up-left. I predicted VM shifts left with Vout moving *upward*.
+Same experiment, mirrored: hold Wp fixed, sweep Wn. I wrote the prediction down before running anything, verbatim, because it's the one worth keeping as evidence: *Wn↑ → Id↑, and since Vgs is fixed, Vds must increase, so Vout rises and the curve shifts up-left.* I predicted VM moving left with Vout climbing.
 
 ![NMOS parametric sweep](nmos_sweep.png)
 
-*Fig 4 — VTC family for increasing Wn. The curves shift left, as with the PMOS sweep — but the body moves DOWN, not up.*
+*Fig 4 — VTC family for increasing Wn.* It agreed with half of that sentence. The curves do shift left, same as the PMOS sweep. But the body moves **down**, not up.
 
-**Observation.** VM shifts left — direction correct. But the VTC body moved *down*. Half my prediction was right, and the half that was wrong was the half carrying the physics.
+This is the more dangerous kind of wrong, because the headline conclusion — "VM moves left" — was correct, while the physics carrying it was invented after the fact to match what I already expected. "Vds must increase" wasn't a derivation. It was a guess wearing a lab coat.
 
-**Missing physics.** A stronger NMOS pulls the output *down* harder. My "Vds increases" step was not physics at all — it was the answer I expected, dressed up as a derivation.
+**What's actually happening:**
 
 ```
-Wn↑  →  kn↑  →  Id↑  →  Ron,n↓        ← consequence, as before
+Wn↑  →  kn↑  →  Id↑  →  Ron,n↓        ← consequence, same as Chapter 2
      →  Vout = VDD · Ron,n / (Ron,p + Ron,n)
-        Ron,n↓  →  Vout↓ for same Vin  ← OPPOSITE to the PMOS case
+        Ron,n↓  →  Vout↓ for the same Vin   ← OPPOSITE trajectory to the PMOS case
      →  VTC shifts down and left
      →  VM↓
 ```
 
-**Updated mental model — the synthesis.** Both sweeps push VM left, but through opposite Vout trajectories:
+A stronger NMOS pulls the output *down* harder — obviously, in hindsight, since it's the pull-down network. Putting Chapters 2 and 3 side by side finally makes the tug-of-war concrete:
 
 | | PMOS W↑ | NMOS W↑ |
 |---|---|---|
@@ -210,137 +139,118 @@ Wn↑  →  kn↑  →  Id↑  →  Ron,n↓        ← consequence, as before
 | VTC body movement | Up + left | Down + left |
 | VM | Decreases | Decreases |
 
-VM is governed by the *ratio* of the two strengths, never by either device alone. The tug-of-war model survived its first real test.
+Both knobs push VM the same direction, through opposite Vout paths. That's the signature of a *ratio* property — VM never depends on either device in isolation, only on their balance. The tug-of-war model just survived its first real cross-examination.
 
-#### Engineering Notebook — Chapter 3
-
-- **Question I can answer now:** how each device's width moves the VTC, including the Vout trajectory, not just the VM direction.
-- **Mistake I corrected:** predicting Vout rises when the pull-down strengthens.
-- **Mental model I built:** VM as a pure ratio property; absolute sizes only matter through their ratio.
-- **General principle:** getting the final direction right for the wrong reason is more dangerous than being wrong — check the intermediate quantities, not just the endpoint.
-- **Connection forward:** if VM is a ratio property, there exists one exact ratio that centres it. Finding it is the next question.
+*What Chapter 3 leaves behind: proof that getting the final answer right for the wrong reason is more dangerous than being visibly wrong — because it doesn't get caught. **Why go to Chapter 4 next:** once both sweeps agree that VM only cares about the ratio kn/kp, that's no longer a qualitative observation — it's a claim with an exact answer somewhere inside it. If VM is a ratio property, there is one specific ratio that centres it, and "somewhere in the 2–3 range" isn't good enough once I know a precise number exists to be found.*
 
 ---
 
-### Chapter 4 — Searching for the Switching Threshold
+## Chapter 4 — The Number the Circuit Was Hiding
 
-**Question.** What exact Wp puts VM at precisely VDD/2 — and what does that number reveal about the technology?
+This is the chapter where the derivation has to actually get written down, because "there exists a balancing ratio" is a claim, not a result.
 
-**Mental model.** From the analytical derivation (worked in full in [`vm_derivation.md`](vm_derivation.md)): VM = VDD/2 requires kn = kp. Since k = µ·Cox·(W/L) and both devices share L:
+**Setting up the math.** In the transition region, both transistors sit in saturation. Using the simple square-law model, their drain currents are:
 
-```
-kn = kp   →   Wp/Wn = µn/µp
-```
+$$I_{Dn} = \frac{k_n}{2}(V_M - V_{tn})^2 \qquad I_{Dp} = \frac{k_p}{2}(V_{DD} - V_M - |V_{tp}|)^2$$
 
-So the balancing width is not just a design number. It is a *measurement of the process itself*.
+They're in series, so at VM the currents must be equal:
 
-**Prediction.** The VM-vs-Wp curve will be concave (the √(kn/kp) compression from Chapter 2), and its crossing with 900 mV will land at a Wp/Wn ratio in the 2–3 range that textbooks quote for µn/µp.
+$$k_n (V_M - V_{tn})^2 = k_p (V_{DD} - V_M - |V_{tp}|)^2$$
+
+Taking the square root of both sides (both quantities positive in this region) and letting $r = \sqrt{k_n/k_p}$:
+
+$$\sqrt{k_n}\,(V_M - V_{tn}) = \sqrt{k_p}\,(V_{DD} - V_M - |V_{tp}|)$$
+
+Solving for VM:
+
+$$V_M = \frac{\sqrt{k_p}\,(V_{DD} - |V_{tp}|) + \sqrt{k_n}\,V_{tn}}{\sqrt{k_n} + \sqrt{k_p}}$$
+
+If the two threshold voltages are reasonably matched ($V_{tn} \approx |V_{tp}| = V_t$), this collapses to:
+
+$$V_M = \frac{V_t \sqrt{k_n} + (V_{DD}-V_t)\sqrt{k_p}}{\sqrt{k_n}+\sqrt{k_p}}$$
+
+Set $V_M = V_{DD}/2$ and the algebra forces exactly one condition: $k_n = k_p$. And since $k = \mu \, C_{ox} \, (W/L)$, with both devices sharing the same L:
+
+$$k_n = k_p \;\Longrightarrow\; \mu_n W_n = \mu_p W_p \;\Longrightarrow\; \boxed{\frac{W_p}{W_n} = \frac{\mu_n}{\mu_p}}$$
+
+That last line is the whole point of the chapter. The width ratio that centres VM isn't just a convenient sizing — it's a direct readout of the technology's mobility ratio. Size the inverter right, and the inverter tells you something true about the process it's built in.
+
+**Prediction:** the VM-vs-Wp curve should be concave — the √(kn/kp) compression seen back in Chapter 2 — and it should cross 900 mV at a Wp/Wn ratio somewhere in the textbook's quoted 2–3 range.
 
 ![VM versus Wp cross-function](vm_vs_wp.png)
 
-*Fig 5 — VM as a function of Wp. Marker M2: Wp = 285.42n → VM = 899.91 mV. The curve is visibly concave — diminishing returns, as predicted.*
-
-**Observation.**
+*Fig 5 — VM as a function of Wp.* It delivers both halves of the prediction. Marker M2 sits at Wp = 285.42 n → VM = 899.91 mV, and the curve is visibly concave — diminishing returns, exactly as the square-root dependence predicts.
 
 | Finding | Value |
 |---|---|
-| Wp for VM = 900 mV | **285.42n** |
+| Wp for VM = 900 mV | **285.42 n** |
 | Confirmed VM | 899.91 mV |
 | Wp/Wn | **2.38** |
 | **µn/µp in gpdk090** | **2.38** |
 
-$$\frac{W_p}{W_n} = \frac{285.42\,\text{n}}{120\,\text{n}} = 2.38 \implies \frac{\mu_n}{\mu_p} = 2.38$$
+$$\frac{W_p}{W_n} = \frac{285.42\text{ n}}{120\text{ n}} = 2.38 \implies \frac{\mu_n}{\mu_p} = 2.38$$
 
-Not a datasheet value. Extracted from the switching behaviour of one inverter.
+Not a datasheet figure — a number extracted from watching one inverter switch.
 
-**A tension worth recording.** This result sat uncomfortably next to Chapter 1, where equal sizing also gave VM ≈ 900 mV. Both cannot follow from the same long-channel equation. The reconciliation is the one Chapter 1 hinted at: at minimum dimensions, second-order effects mask the mobility imbalance; once Wp moves away from minimum, the classical √(kn/kp) dependence takes over and governs the curve in Fig 5. The extraction is taken from the sweep region where the analytical model actually applies. Long-channel formulas at a 90 nm node are a regime, not a law.
+But there's a loose thread the derivation itself surfaces: Chapter 1 got VM = 900 mV at *equal* sizing, and this chapter says it takes a 2.38:1 ratio to get there. Both can't come from the same equation. The resolution is the one Chapter 1 half-predicted — at minimum dimensions, second-order effects mask the mobility imbalance and the classical square-root relationship hasn't taken over yet; once Wp moves well past minimum, it does, and Fig 5 is sampled from the region where that model actually applies. The long-channel formula above is a *regime*, not a universal law — and knowing exactly where its regime starts turned out to matter more than the formula itself.
 
-#### Engineering Notebook — Chapter 4
-
-- **Question I can answer now:** the exact sizing condition for a centred VM, and the real µn/µp of this PDK.
-- **Mistake I corrected:** treating the analytical VM equation as valid across the whole sizing range rather than in its regime.
-- **Mental model I built:** a well-chosen circuit measurement doubles as a process characterisation.
-- **General principle:** when two of your own results appear to conflict, the boundary between them usually marks where a model's assumptions break.
-- **Connection forward:** VM is a DC quantity. Whether this sizing also fixes the *dynamic* behaviour is a separate question — and I did not assume the answer.
+*What Chapter 4 leaves behind: the sizing Wn = 120n, Wp = 285.42n, and a derivation on paper to match the number on screen. **Why go to Chapter 5 next:** the derivation in this chapter only ever set currents equal at one operating point — it's a DC, standing-still condition. It says nothing about how fast the output actually moves during a real switching event, and "balanced when static" quietly assuming "balanced when switching" is exactly the kind of unearned assumption this whole notebook exists to catch.*
 
 ---
 
-### Chapter 5 — Understanding Dynamic Behaviour
+## Chapter 5 — Standing Still Is Not the Same as Moving
 
-**Question.** We have centred VM. Does the transient response balance at the same sizing?
+Before running the next simulation, I made myself answer a question that felt too basic to need answering: *what is VM, actually?* Not "the crossing point on a graph" — the input voltage at which Vout = Vin, the exact midpoint of the switch, both transistors in saturation simultaneously, gain at its peak magnitude. That's precisely what marker M1 was showing back in Fig 2. **Why bother re-stating something this basic:** because every later argument in this notebook — including the delay-balance claim I was about to make — leans on VM meaning exactly this and nothing looser. If the definition is fuzzy, "VM centres delay too" becomes a coincidence instead of a proof. Revisiting a "basic" definition felt like a waste of time. It wasn't.
 
-Before answering, I had to close a gap in my own vocabulary. Mid-way through this work I forced myself to re-state, from scratch: *what is VM, actually?* The answer I settled on: VM is the input voltage at which Vout = Vin — the point where the inverter is exactly halfway through switching, both devices in saturation, gain at its peak. That is precisely what marker M1 in Fig 2 was showing. It seems basic. It was worth doing — Chapter 7 and the entire SRAM stage rest on this definition.
-
-**Mental model.** VM centering is a static condition — it balances the operating point. Propagation delay is dynamic — it depends on how fast each device charges or discharges the load capacitance. Related, because both trace back to kn and kp. But I could not yet prove they were the *same* condition, so the prediction stayed cautious: some asymmetry may remain.
+**Question:** VM centres the *static* operating point. Propagation delay is a *dynamic* quantity — how fast each device can charge or discharge a load capacitor. Both trace back to the same kn and kp, so they're clearly related. But related isn't identical, and I didn't yet have proof they were the same condition. So the prediction stayed deliberately cautious: some asymmetry may remain even at the VM-balanced sizing.
 
 ![Transient at Wp = 285.42n](baseline_transient.png)
 
-*Fig 6 — Transient at the VM-balanced sizing. The output fall (NMOS discharging) is visibly faster than the rise (PMOS charging): tpLH > tpHL.*
+*Fig 6 — Transient at the VM-balanced sizing.* It backs the caution up: the output's fall — NMOS discharging — is visibly quicker than the rise — PMOS charging. Even at the sizing the math had just certified as balanced, tpLH > tpHL in this particular measurement.
 
-**Observation.** Even at VM-balanced sizing the edges are not symmetric in this run. At this point something became genuinely interesting: is the residual asymmetry telling me the delay-balance sizing differs from the VM sizing — or is it measurement and load detail on top of the same underlying balance point? Only a proper delay-vs-Wp sweep could separate the two.
+That leaves an open fork: is this asymmetry telling me the delay-balance sizing genuinely differs from the VM sizing — or is it just measurement and load detail sitting on top of the same underlying balance? A single transient can't answer that. Only a full sweep can.
 
-#### Engineering Notebook — Chapter 5
-
-- **Question I can answer now:** why VM centering does not automatically guarantee edge symmetry in a given transient measurement.
-- **Mistake I corrected:** conflating a DC equilibrium with a dynamic one without proof.
-- **Mental model I built:** rise governed by PMOS charging CL, fall governed by NMOS discharging CL — two separate races over the same capacitor.
-- **General principle:** when a definition feels "too basic to revisit," revisit it. Cheap insurance.
-- **Connection forward:** the delay sweep will either split the two optimisations apart or collapse them into one.
+*What Chapter 5 leaves behind: a re-grounded definition of VM, and an honest unresolved asymmetry instead of a hand-wave. **Why go to Chapter 6 next:** a single transient at one sizing can't tell me whether the delay-balance point is at the same Wp as the VM-balance point or nearby-but-different — it's one data point, not a curve. Only sweeping Wp and watching where tpHL and tpLH actually cross can turn "some asymmetry may remain" into a real answer.*
 
 ---
 
-### Chapter 6 — Balancing Propagation Delay
+## Chapter 6 — Two Questions, One Answer
 
-**Question.** What Wp equalises tpHL and tpLH — and is it the same Wp that centred VM, or a different one?
+**Prediction, the strongest and most specific of the whole project, derived before the run:**
 
-**Prediction — the strongest of the project, derived before the run:**
+$$t_{pHL} \propto \frac{C_L}{k_n} \qquad t_{pLH} \propto \frac{C_L}{k_p}$$
 
-```
-tpHL ∝ CL / kn     (NMOS discharges the output node)
-tpLH ∝ CL / kp     (PMOS charges the output node)
+Setting them equal:
 
-tpHL = tpLH   →   CL/kn = CL/kp   →   kn = kp
-```
+$$t_{pHL} = t_{pLH} \;\Longrightarrow\; \frac{C_L}{k_n} = \frac{C_L}{k_p} \;\Longrightarrow\; k_n = k_p$$
 
-kn = kp is *identical* to the VM = VDD/2 condition from Chapter 4. So the prediction was specific: the tp_rise and tp_fall curves must cross at Wp ≈ 285n, the same value the VM extraction produced.
+That is *the exact same condition* as VM = VDD/2 from Chapter 4. Which makes the prediction unusually falsifiable: if this is right, the tp_rise and tp_fall curves have to cross at Wp ≈ 285 n — the identical number the VM extraction produced, not a nearby one.
 
 ![Delay crossover sweep](delay_crossover.png)
 
-*Fig 7 — tp_rise (falling with Wp) against tp_fall (rising with Wp). Marker M2 at the crossover: Wp = 285.4629n, tp = 8.87 ps.*
-
-**Observation.**
+*Fig 7 — tp_rise (falling with Wp) against tp_fall (rising with Wp).* This is the payoff shot of the story: the two curves cross at marker M2 — Wp = 285.4629 n, tp = 8.87 ps.
 
 | Optimisation | Wp required | Governing condition |
 |---|---|---|
-| VM = VDD/2 | 285.42n | kn = kp |
-| tpHL = tpLH | 285.46n | kn = kp |
-| **Difference** | **0.04n ≈ 0** | **same condition** |
+| VM = VDD/2 | 285.42 n | kn = kp |
+| tpHL = tpLH | 285.46 n | kn = kp |
+| **Difference** | **0.04 n ≈ 0** | **same condition** |
 
-The prediction held to within 0.04 nm — noise. And this time it held for the reason I expected, which had not been true earlier in the project.
+Half a picometre of width — noise, not a discrepancy. And this time the prediction held for the reason I'd claimed it would hold, which by this point in the story had stopped being something I could take for granted.
 
-**Engineering insight.** VM centering and delay balancing are not two optimisations. They are two observable consequences of one physical condition, kn = kp. The question "should I size for threshold or for speed?" is, in this technology, a false dichotomy — one sizing, two benefits, one root cause. This is the kind of statement a simulator alone never produces; it only falls out when the prediction is derived first and the simulation is used as the judge.
+**The insight this chapter actually earns:** VM-centering and delay-balancing were never two separate design goals wearing different names. They're two visible symptoms of one underlying condition, kn = kp. "Should I size this inverter for threshold or for speed?" is, in this technology, not a real trade-off — it's one sizing decision with two rewards. That sentence is the kind a simulator alone never hands you; it only appears when the prediction is written first and the simulation is asked to referee it.
 
-#### Engineering Notebook — Chapter 6
-
-- **Question I can answer now:** why DC and dynamic balance converge, not merely that they do.
-- **Mistake I corrected:** none in this chapter — which is itself the data point. The model had become predictive.
-- **Mental model I built:** apparently distinct specifications can be projections of a single underlying parameter; find the parameter.
-- **General principle:** the goal of characterisation is to make the next simulation boring.
-- **Connection forward:** with sizing frozen at Wn = 120n, Wp = 285.42n, the last open quantity is noise immunity.
+*What Chapter 6 leaves behind: sizing frozen for good — Wn = 120n, Wp = 285.42n. **Why go to Chapter 7 next:** two of the three original objectives — VM centring and delay balancing — are now closed, and both turned out to be the same condition wearing different clothes. The third objective, noise immunity, hasn't been touched, and it's the one that decides whether this "balanced" inverter is actually robust or just balanced on paper.*
 
 ---
 
-### Chapter 7 — Quantifying Noise Immunity
+## Chapter 7 — What's Left When the Sizing Is Settled
 
-**Question.** At the final sizing, how much noise can this inverter reject before a logic level becomes ambiguous?
-
-**Method and prediction.** VIL and VIH are defined by the unity-gain points of the VTC (|dVout/dVin| = 1). With kn = kp, I expected NML and NMH to come out nearly equal — near-perfect symmetry would be the final confirmation that the sizing is right; any residual asymmetry would have to be explained, not waved away.
+**Method.** VIL and VIH are defined at the unity-gain points of the VTC, where |dVout/dVin| = 1. With kn = kp already established, the prediction was clean: NML and NMH should come out nearly equal, and near-symmetry would be the final confirmation that the sizing decision made three chapters ago was the right one — with any leftover asymmetry needing an actual explanation, not a shrug.
 
 ![Gain plot and noise margin extraction](noise_margin.png)
 
-*Fig 8 — dVout/dVin versus Vin. Unity-gain markers: VIL = 701.589 mV, VIH = 1.14995 V. Peak gain ≈ −5.4 at VM = 900 mV.*
-
-**Observation.**
+*Fig 8 — dVout/dVin versus Vin, unity-gain markers.* It marks the crossings at VIL = 701.589 mV, VIH = 1.14995 V, with peak gain magnitude around 5.4 sitting right at VM = 900 mV — the same VM that's been the spine of every chapter before this one.
 
 | Parameter | Expression | Value |
 |---|---|---|
@@ -349,19 +259,13 @@ The prediction held to within 0.04 nm — noise. And this time it held for the r
 | Symmetry | NMH / NML | **0.926** |
 | Peak gain at VM | \|dVout/dVin\|max | **≈ 5.4** |
 
-**Engineering insight.** The margins are nearly symmetric — 0.926 against an ideal 1.0 — confirming the sizing. The residual 51 mV asymmetry is not sizing error: kn = kp balances the *strengths*, but the threshold voltages |Vtp| and Vtn of this PDK are not perfectly matched, and no width choice can correct a Vt mismatch. Recognising which imperfections width can fix and which it cannot is itself a sizing skill.
+0.926 against a perfectly symmetric 1.0 — close enough to confirm the sizing, not close enough to ignore. The remaining 51 mV gap isn't a sizing error at all: kn = kp balances device *strength*, but it says nothing about the threshold voltages Vtn and |Vtp| of this PDK, which aren't perfectly matched to begin with — and no amount of width-tuning can fix a threshold mismatch, because width was never the knob that controlled it. Knowing which imperfection a given knob *can't* fix turned out to be as important as knowing which ones it can.
 
-#### Engineering Notebook — Chapter 7
-
-- **Question I can answer now:** the quantitative noise immunity of the final design, and the physical origin of its residual asymmetry.
-- **Mistake I corrected:** the early instinct that "one more sizing tweak" can fix any asymmetry.
-- **Mental model I built:** W controls strength ratio; Vt mismatch is a separate, width-immune axis.
-- **General principle:** know which knob controls which error term before turning knobs.
-- **Connection forward:** these noise margins become the vocabulary for static noise margin (SNM) analysis of the SRAM cell in Stage 3.
+*What Chapter 7 leaves behind: the last of the six original objectives closed, and a design that's now been checked on three separate axes — static (VM), dynamic (delay), and robustness (noise margin) — all pointing back to the same sizing.*
 
 ---
 
-## Final Engineering Insights
+## Epilogue: What Actually Changed
 
 Final design: **Wn = 120n, Wp = 285.42n, L = 100n, VDD = 1.8 V.**
 
@@ -373,13 +277,15 @@ Final design: **Wn = 120n, Wp = 285.42n, L = 100n, VDD = 1.8 V.**
 | Peak gain at VM | ≈ 5.4 |
 | µn/µp (extracted) | 2.38 |
 
-What actually changed between the first chapter and the last:
+Reading the seven chapters back to back, the number that changed the least was VM — 900 mV, present from Chapter 1's accident all the way to Chapter 7's noise margins. What changed was *how much that number was allowed to mean*:
 
-1. **Causality became non-negotiable.** W → k → Id → Ron, in that order, always. Both of my early reasoning failures were causality inversions, and both produced correct-looking numbers.
-2. **VM stopped being a point on a curve and became a competition.** Every later structure — latch metastability, SRAM read disturb, sense-amp regeneration — is the same tug-of-war wearing different clothes.
-3. **One condition, many faces.** kn = kp centres VM *and* balances delay *and* symmetrises noise margins. Specifications that look independent often are not.
-4. **Models have regimes.** The long-channel VM equation described the sweep region and failed at minimum dimensions. Knowing where a model stops working proved more useful than the model itself.
-5. **By Chapter 6, the simulations had become confirmations.** That transition — not any single number — was the actual deliverable of this stage.
+1. **Causality stopped being optional.** W → k → Id → Ron, always in that order. Both real mistakes in this project — Chapters 2 and 3 — were the chain run backwards, and both produced numbers that looked fine.
+2. **VM stopped being a point on a curve and became a competition.** It's the equilibrium of a tug-of-war between pull-up and pull-down strength, and every later result in this notebook — the delay crossover, the noise margins — turned out to be that same competition, measured a different way.
+3. **One condition, three faces.** kn = kp centres VM, balances delay, and symmetrises noise margins. Specifications that look independent on a datasheet often trace back to the same root cause.
+4. **Every model has a regime, not a universal claim.** The long-channel VM equation was exactly right — inside the sizing range where it applies, and visibly wrong at minimum geometry. Knowing the boundary mattered more than the equation.
+5. **By Chapter 6, simulation had stopped surprising me.** Not any single number — that transition is the actual deliverable of this notebook.
+
+That last point is really the whole answer to the question this prologue opened with: what does it mean to *understand* a circuit, rather than just simulate it? It means the gap between "what I predicted" and "what the simulator showed" closes — chapter by chapter, contradiction by contradiction — until it isn't a gap anymore.
 
 ---
 
@@ -408,19 +314,6 @@ What actually changed between the first chapter and the last:
 - N. Weste and D. Harris, *CMOS VLSI Design: A Circuits and Systems Perspective*, 4th ed., Addison-Wesley.
 - J. Rabaey, A. Chandrakasan, B. Nikolić, *Digital Integrated Circuits: A Design Perspective*, 2nd ed.
 - Cadence gpdk090 Process Design Kit documentation.
-
----
-
-## Future Work
-
-| Stage | Topic | What it inherits from this stage | Status |
-|---|---|---|---|
-| **1 — Inverter** | **VM, delay, noise margins** | **Foundation** | **This repository** |
-| 2 — Bistable latch | Cross-coupled feedback | VM becomes the metastability point | Planned |
-| 3 — 6T SRAM cell | Write / read / hold SNM | VM becomes the read-disturb threshold | Planned |
-| 4 — Sense amplifier | Comparative SA analysis | VM becomes the regeneration trigger | Planned |
-
-The switching threshold is not an isolated inverter concept. The same tug-of-war between pull-up and pull-down decides stability in every stage above. The open question carried into Stage 2: when two of these inverters are cross-coupled, the point I have been calling VM stops being a threshold and becomes the boundary between two memories. What happens exactly *at* that boundary is where the next notebook begins.
 
 ---
 
